@@ -1,5 +1,6 @@
 import flet as ft
 import sqlite3
+from datetime import datetime, timedelta
 
 NOMBRE_DB = "tienda.db"
 
@@ -50,6 +51,11 @@ def main(page: ft.Page):
         conn.execute("ALTER TABLE registro_comisiones ADD COLUMN adeudo_comision REAL")
         conn.execute("UPDATE registro_comisiones SET adeudo_comision = monto_comision WHERE adeudo_comision IS NULL")
     except: 
+        pass
+
+    try:
+        conn.execute("ALTER TABLE clientes ADD COLUMN fecha_registro TEXT DEFAULT (datetime('now', 'localtime'))")
+    except:
         pass
 
     # Pagos a distribuidoras
@@ -125,7 +131,7 @@ def main(page: ft.Page):
             else:
                 # MODO NUEVO
                 cursor.execute(
-                    "INSERT INTO clientes (nombre, domicilio, telefono) VALUES (?, ?, ?)", 
+                    "INSERT INTO clientes (nombre, domicilio, telefono, fecha_registro) VALUES (?, ?, ?, datetime('now', 'localtime'))", 
                     (txt_nombre.value, txt_domicilio.value, txt_telefono.value)
                 )
                 page.snack_bar = ft.SnackBar(ft.Text("¡Cliente guardado con éxito!"))
@@ -188,6 +194,12 @@ def main(page: ft.Page):
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
+            # MIGRACIÓN SEGURA: agregar fecha_registro si no existe en la tabla clientes
+            columnas_existentes = [row[1] for row in cursor.execute("PRAGMA table_info(clientes)").fetchall()]
+            if "fecha_registro" not in columnas_existentes:
+                cursor.execute("ALTER TABLE clientes ADD COLUMN fecha_registro TEXT")
+                conn.commit()
+
             # SINCRONIZADO CON LA VISTA DE LA BASE DE DATOS
             query = """
                 SELECT 
@@ -195,10 +207,11 @@ def main(page: ft.Page):
                     c.nombre,
                     c.domicilio,
                     c.telefono,
-                    IFNULL((SELECT SUM(total) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
-                    IFNULL((SELECT SUM(p.monto) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), 0) AS total_pagado,
+                    IFNULL((SELECT SUM(adeudo) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
+                    0 AS total_pagado,
                     IFNULL((SELECT MAX(fecha) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
-                    IFNULL((SELECT MAX(p.fecha) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), '2000-01-01') AS ultimo_pago
+                    IFNULL((SELECT MAX(p.fecha) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), '2000-01-01') AS ultimo_pago,
+                    IFNULL(c.fecha_registro, 'Sin fecha') AS fecha_registro
                 FROM clientes c
             """
             if filtro:
@@ -208,56 +221,40 @@ def main(page: ft.Page):
                 query += " ORDER BY c.nombre"
                 cursor.execute(query)
                 
+            dos_anos = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
+            seis_meses = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+            un_ano = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+
             for r in cursor.fetchall():
                 id_c, nombre_c, domicilio_c, telefono_c = r[0], r[1], r[2], r[3]
                 total_comprado, total_pagado = r[4], r[5]
                 ultima_venta, ultimo_pago = r[6], r[7]
+                fecha_registro_c = r[8]
 
                 adeudo_val = total_comprado - total_pagado
 
-                # CLASIFICACIÓN SINCRONIZADA CON LA VISTA clasificacion_clientes de database1.py
-                if adeudo_val > 0 and ultimo_pago <= "2000-01-01":
-                    # Sin pagos desde hace mucho
-                    from datetime import datetime, timedelta
-                    dos_anos = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
-                    seis_meses = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
-                    un_ano = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-                    if ultimo_pago <= dos_anos:
-                        tipo_cliente = "ROJO"
-                        color_v = "red"
-                    elif ultimo_pago >= seis_meses:
-                        tipo_cliente = "VERDE"
-                        color_v = "green"
-                    elif adeudo_val > 0 and ultimo_pago < seis_meses:
-                        tipo_cliente = "AMARILLO"
-                        color_v = "orange"
-                    else:
-                        tipo_cliente = "SIN CLASIFICAR"
-                        color_v = "grey"
-                else:
-                    from datetime import datetime, timedelta
-                    dos_anos = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
-                    seis_meses = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
-                    un_ano = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+                # CLASIFICACIÓN — Espejo exacto de la vista clasificacion_clientes en database1.py
+                # ultima_actividad = el más reciente entre ultima_venta y ultimo_pago
+                ultima_actividad = ultima_venta if ultima_venta > ultimo_pago else ultimo_pago
 
-                    if adeudo_val > 0 and ultimo_pago <= dos_anos:
-                        tipo_cliente = "ROJO"
-                        color_v = "red"
-                    elif adeudo_val > 0 and ultimo_pago >= seis_meses:
-                        tipo_cliente = "VERDE"
-                        color_v = "green"
-                    elif adeudo_val <= 0 and ultima_venta >= un_ano:
-                        tipo_cliente = "VERDE"
-                        color_v = "green"
-                    elif adeudo_val > 0 and ultimo_pago < seis_meses:
-                        tipo_cliente = "AMARILLO"
-                        color_v = "orange"
-                    elif adeudo_val <= 0 and ultima_venta <= dos_anos:
-                        tipo_cliente = "AMARILLO"
-                        color_v = "orange"
-                    else:
-                        tipo_cliente = "SIN CLASIFICAR"
-                        color_v = "grey"
+                if adeudo_val > 0 and ultima_actividad <= dos_anos:
+                    tipo_cliente = "ROJO"
+                    color_v = "red"
+                elif adeudo_val > 0 and ultima_actividad >= seis_meses:
+                    tipo_cliente = "VERDE"
+                    color_v = "green"
+                elif adeudo_val <= 0 and ultima_venta >= un_ano:
+                    tipo_cliente = "VERDE"
+                    color_v = "green"
+                elif adeudo_val > 0 and ultima_actividad < seis_meses:
+                    tipo_cliente = "AMARILLO"
+                    color_v = "orange"
+                elif adeudo_val <= 0 and ultima_venta <= dos_anos:
+                    tipo_cliente = "AMARILLO"
+                    color_v = "orange"
+                else:
+                    tipo_cliente = "SIN CLASIFICAR"
+                    color_v = "grey"
 
                 # Texto de Estado de Cuenta
                 if adeudo_val > 0: 
@@ -285,6 +282,7 @@ def main(page: ft.Page):
                         ft.DataCell(ft.Text(txt_adeudo, color=color_adeudo, weight="bold")),
                         ft.DataCell(ft.Text("●", color=color_v, size=20)), 
                         ft.DataCell(ft.Text(tipo_cliente)),
+                        ft.DataCell(ft.Text(str(fecha_registro_c))),
                         ft.DataCell(ft.Row([btn_edit, btn_del], tight=True)),
                     ])
                 )
@@ -307,6 +305,7 @@ def main(page: ft.Page):
             ft.DataColumn(ft.Text("Estado de Cuenta")), 
             ft.DataColumn(ft.Text("Status")), 
             ft.DataColumn(ft.Text("Clasificación")),
+            ft.DataColumn(ft.Text("Fecha Registro")),
             ft.DataColumn(ft.Text("Acciones")),
         ], 
         rows=[]
