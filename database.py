@@ -1,0 +1,116 @@
+import sqlite3
+
+NOMBRE_DB = "tienda.db"
+
+def inicializar_tablas():
+    conn = sqlite3.connect(NOMBRE_DB)
+    cursor = conn.cursor()
+
+    # ==========================================
+    # 1. TABLAS CATÁLOGO (Las que no dependen de otras)
+    # ==========================================
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS categorias (
+        id_categoria INTEGER PRIMARY KEY AUTOINCREMENT,
+        categoria TEXT NOT NULL
+    )''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS proveedores (
+        id_proveedor INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT NOT NULL,
+        telefono TEXT,
+        email TEXT
+    )''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS empleados (
+        rfc TEXT PRIMARY KEY,
+        nombre TEXT NOT NULL,
+        apaterno TEXT,
+        amaterno TEXT,
+        telefono TEXT,
+        email TEXT
+    )''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS tipos_cliente (
+        id_tipo INTEGER PRIMARY KEY AUTOINCREMENT,
+        tipo TEXT NOT NULL
+    )''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS formas_pago (
+        id_forma_pago INTEGER PRIMARY KEY AUTOINCREMENT,
+        forma_pago TEXT NOT NULL
+    )''')
+
+    # ==========================================
+    # 2. TABLAS PRINCIPALES (Productos, Compras, etc.)
+    # ==========================================
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS productos (
+        id_producto INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_categoria INTEGER,
+        descripcion TEXT,
+        precio REAL,
+        FOREIGN KEY (id_categoria) REFERENCES categorias (id_categoria)
+    )''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS compras (
+        folio_compra INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_proveedor INTEGER,
+        fecha TEXT,
+        sub_total REAL,
+        FOREIGN KEY (id_proveedor) REFERENCES proveedores (id_proveedor)
+    )''')
+
+    # ==========================================
+    # 3. DETALLES (Relaciones muchos a muchos del diagrama)
+    # ==========================================
+    
+    # Detalle de qué productos llegaron en cada compra al proveedor
+    cursor.execute('''CREATE TABLE IF NOT EXISTS detalle_compras (
+        id_detalle INTEGER PRIMARY KEY AUTOINCREMENT,
+        folio_compra INTEGER,
+        id_producto INTEGER,
+        cantidad INTEGER,
+        precio_compra REAL,
+        FOREIGN KEY (folio_compra) REFERENCES compras (folio_compra),
+        FOREIGN KEY (id_producto) REFERENCES productos (id_producto)
+    )''')
+
+    # Detalle de qué productos se llevan en cada venta 
+    # (Se enlaza con tu tabla "ventas" existente)
+    cursor.execute('''CREATE TABLE IF NOT EXISTS detalle_ventas (
+        id_detalle INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_venta INTEGER,
+        id_producto INTEGER,
+        cantidad INTEGER,
+        precio_venta REAL,
+        FOREIGN KEY (id_venta) REFERENCES ventas (id),
+        FOREIGN KEY (id_producto) REFERENCES productos (id_producto)
+    )''')
+
+    # ==========================================
+    # 4. TABLAS DE RECURSOS HUMANOS (Del diagrama)
+    # ==========================================
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS tipos_empleado (
+        id_tipo INTEGER PRIMARY KEY AUTOINCREMENT,
+        tipo TEXT
+    )''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS contratos (
+        id_contrato INTEGER PRIMARY KEY AUTOINCREMENT,
+        rfc_empleado TEXT,
+        id_tipo INTEGER,
+        fecha_inicio TEXT,
+        fecha_fin TEXT,
+        sueldo REAL,
+        FOREIGN KEY (rfc_empleado) REFERENCES empleados (rfc),
+        FOREIGN KEY (id_tipo) REFERENCES tipos_empleado (id_tipo)
+    )''')
+
+    conn.commit()
+    conn.close()
+    print("¡Base de datos estructurada con las tablas del diagrama ER!")
+
+if __name__ == "__main__":
+    inicializar_tablas()
