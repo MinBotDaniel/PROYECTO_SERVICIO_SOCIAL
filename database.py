@@ -170,6 +170,11 @@ def inicializar_tablas():
                  AND ultima_venta >= date('now', '-1 year') 
             THEN 'VERDE'
             
+            -- 🟢 VERDE (Cliente Pagador): SÍ DEBE dinero, pero ha dado abonos recientes (menos de 6 meses).
+            WHEN (total_comprado - total_pagado) > 0 
+                 AND ultimo_pago > date('now', '-6 months') 
+            THEN 'VERDE'
+            
             -- 🟡 AMARILLO: No debe nada, pero lleva más de 1 año sin comprar
             WHEN (total_comprado - total_pagado) <= 0 
                  AND ultima_venta < date('now', '-1 year') 
