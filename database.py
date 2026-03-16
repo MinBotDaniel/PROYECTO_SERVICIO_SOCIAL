@@ -122,67 +122,44 @@ def inicializar_tablas():
     )''')
 
     # ==========================================
-    # 6. INTELIGENCIA DE CLIENTES (Semaforización Automática)
+    # 6. INTELIGENCIA DE CLIENTES (Versión Definitiva)
     # ==========================================
     
-    # Borramos la vista si ya existía para poder actualizar las reglas
     cursor.execute("DROP VIEW IF EXISTS clasificacion_clientes;")
 
     cursor.execute('''
     CREATE VIEW clasificacion_clientes AS
-    WITH Resumen AS (
-        SELECT 
-            c.id,
-            c.nombre,
-            c.telefono,
-            -- Sumamos todo lo que ha comprado
-            COALESCE((SELECT SUM(total) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
-            -- Sumamos todo lo que ha pagado
-            COALESCE((SELECT SUM(monto) FROM pagos WHERE cliente_id = c.id), 0) AS total_pagado,
-            -- Buscamos la fecha de su última compra
-            COALESCE((SELECT MAX(fecha) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
-            -- Buscamos la fecha de su último abono
-            COALESCE((SELECT MAX(fecha) FROM pagos WHERE cliente_id = c.id), '2000-01-01') AS ultimo_pago
-        FROM clientes c
-    )
     SELECT 
         id,
         nombre,
         telefono,
         (total_comprado - total_pagado) AS adeudo_actual,
-        -- Comparamos para ver qué hizo al último: ¿comprar o pagar?
-        MAX(ultima_venta, ultimo_pago) AS ultima_actividad,
         
-        -- AQUI ESTÁN TUS REGLAS DE NEGOCIO EXACTAS:
+        CASE WHEN ultima_venta > ultimo_pago THEN ultima_venta ELSE ultimo_pago END AS ultima_actividad,
+        
         CASE 
-            -- 🔴 ROJO: Quedó a deber y su último movimiento fue hace más de 2 años
-            WHEN (total_comprado - total_pagado) > 0 
-                 AND MAX(ultima_venta, ultimo_pago) <= date('now', '-2 years') 
-            THEN 'ROJO'
-            
-            -- 🟡 AMARILLO: Tiene deuda, pero ha abonado o comprado en los últimos 2 años
-            WHEN (total_comprado - total_pagado) > 0 
-                 AND MAX(ultima_venta, ultimo_pago) > date('now', '-2 years') 
-            THEN 'AMARILLO'
-            
-            -- 🟢 VERDE (Regular): No debe nada y compró hace menos de 1 año
-            WHEN (total_comprado - total_pagado) <= 0 
-                 AND ultima_venta >= date('now', '-1 year') 
-            THEN 'VERDE'
-            
-            -- 🟢 VERDE (Cliente Pagador): SÍ DEBE dinero, pero ha dado abonos recientes (menos de 6 meses).
-            WHEN (total_comprado - total_pagado) > 0 
-                 AND ultimo_pago > date('now', '-6 months') 
-            THEN 'VERDE'
-
-            -- 🟡 AMARILLO: No debe nada, pero lleva más de 1 año sin comprar
-            WHEN (total_comprado - total_pagado) <= 0 
-                 AND ultima_venta < date('now', '-1 year') 
-            THEN 'AMARILLO'
-            
+            WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago <= date('now', '-6 months') THEN 'ROJO'
+            WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago > date('now', '-6 months') THEN 'VERDE'
+            WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta >= date('now', '-1 year') THEN 'VERDE'
+            WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta < date('now', '-1 year') THEN 'AMARILLO'
             ELSE 'SIN CLASIFICAR'
         END AS tipo_cliente
-    FROM Resumen;
+    FROM (
+        SELECT 
+            c.id,
+            c.nombre,
+            c.telefono,
+            
+            -- Las ventas sí se conectan directo al cliente
+            IFNULL((SELECT SUM(total) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
+            IFNULL((SELECT MAX(fecha) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
+            
+            -- EL PUENTE: Los pagos se conectan a la venta, y la venta al cliente
+            IFNULL((SELECT SUM(p.monto) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), 0) AS total_pagado,
+            IFNULL((SELECT MAX(p.fecha) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), '2000-01-01') AS ultimo_pago
+            
+        FROM clientes c
+    );
     ''')
 
     # ==========================================
