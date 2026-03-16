@@ -160,10 +160,10 @@ def inicializar_tablas():
                  AND MAX(ultima_venta, ultimo_pago) <= date('now', '-2 years') 
             THEN 'ROJO'
             
-            -- 🟢 VERDE (Crédito Vigente): Tiene deuda, pero ha abonado o comprado en los últimos 2 años
+            -- 🟡 AMARILLO: Tiene deuda, pero ha abonado o comprado en los últimos 2 años
             WHEN (total_comprado - total_pagado) > 0 
                  AND MAX(ultima_venta, ultimo_pago) > date('now', '-2 years') 
-            THEN 'VERDE'
+            THEN 'AMARILLO'
             
             -- 🟢 VERDE (Regular): No debe nada y compró hace menos de 1 año
             WHEN (total_comprado - total_pagado) <= 0 
