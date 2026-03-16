@@ -126,6 +126,65 @@ def inicializar_tablas():
         FOREIGN KEY (id_tipo) REFERENCES tipos_empleado (id_tipo)
     )''')
 
+    # ==========================================
+    # 6. INTELIGENCIA DE CLIENTES (Semaforización Automática)
+    # ==========================================
+    
+    # Borramos la vista si ya existía para poder actualizar las reglas
+    cursor.execute("DROP VIEW IF EXISTS clasificacion_clientes;")
+
+    cursor.execute('''
+    CREATE VIEW clasificacion_clientes AS
+    WITH Resumen AS (
+        SELECT 
+            c.id,
+            c.nombre,
+            c.telefono,
+            -- Sumamos todo lo que ha comprado
+            COALESCE((SELECT SUM(total) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
+            -- Sumamos todo lo que ha pagado
+            COALESCE((SELECT SUM(monto) FROM pagos WHERE cliente_id = c.id), 0) AS total_pagado,
+            -- Buscamos la fecha de su última compra
+            COALESCE((SELECT MAX(fecha) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
+            -- Buscamos la fecha de su último abono
+            COALESCE((SELECT MAX(fecha) FROM pagos WHERE cliente_id = c.id), '2000-01-01') AS ultimo_pago
+        FROM clientes c
+    )
+    SELECT 
+        id,
+        nombre,
+        telefono,
+        (total_comprado - total_pagado) AS adeudo_actual,
+        -- Comparamos para ver qué hizo al último: ¿comprar o pagar?
+        MAX(ultima_venta, ultimo_pago) AS ultima_actividad,
+        
+        -- AQUI ESTÁN TUS REGLAS DE NEGOCIO EXACTAS:
+        CASE 
+            -- 🔴 ROJO: Quedó a deber y su último movimiento fue hace más de 2 años
+            WHEN (total_comprado - total_pagado) > 0 
+                 AND MAX(ultima_venta, ultimo_pago) <= date('now', '-2 years') 
+            THEN 'ROJO'
+            
+            -- 🟢 VERDE (Crédito Vigente): Tiene deuda, pero ha abonado o comprado en los últimos 2 años
+            WHEN (total_comprado - total_pagado) > 0 
+                 AND MAX(ultima_venta, ultimo_pago) > date('now', '-2 years') 
+            THEN 'VERDE'
+            
+            -- 🟢 VERDE (Regular): No debe nada y compró hace menos de 1 año
+            WHEN (total_comprado - total_pagado) <= 0 
+                 AND ultima_venta >= date('now', '-1 year') 
+            THEN 'VERDE'
+            
+            -- 🟡 AMARILLO: No debe nada, pero lleva más de 1 año sin comprar
+            WHEN (total_comprado - total_pagado) <= 0 
+                 AND ultima_venta < date('now', '-1 year') 
+            THEN 'AMARILLO'
+            
+            ELSE 'SIN CLASIFICAR'
+        END AS tipo_cliente
+    FROM Resumen;
+    ''')
+
     conn.commit()
     conn.close()
     print("¡Base de datos estructurada y tabla de ventas actualizada para el POS!")
