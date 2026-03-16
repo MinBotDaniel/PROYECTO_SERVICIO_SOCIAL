@@ -174,7 +174,7 @@ def inicializar_tablas():
             WHEN (total_comprado - total_pagado) > 0 
                  AND ultimo_pago > date('now', '-6 months') 
             THEN 'VERDE'
-            
+
             -- 🟡 AMARILLO: No debe nada, pero lleva más de 1 año sin comprar
             WHEN (total_comprado - total_pagado) <= 0 
                  AND ultima_venta < date('now', '-1 year') 
@@ -183,6 +183,32 @@ def inicializar_tablas():
             ELSE 'SIN CLASIFICAR'
         END AS tipo_cliente
     FROM Resumen;
+    ''')
+
+    # ==========================================
+    # 7. TRIGGERS (Automatización de Inventario)
+    # ==========================================
+    
+    # Robot 1: Cuando se registre un producto en una venta, restar del stock
+    cursor.execute('''
+    CREATE TRIGGER IF NOT EXISTS restar_inventario_por_venta
+    AFTER INSERT ON detalle_ventas
+    BEGIN
+        UPDATE productos 
+        SET stock = stock - NEW.cantidad
+        WHERE id_producto = NEW.id_producto;
+    END;
+    ''')
+
+    # Robot 2: Cuando se registre una compra al proveedor, sumar al stock
+    cursor.execute('''
+    CREATE TRIGGER IF NOT EXISTS sumar_inventario_por_compra
+    AFTER INSERT ON detalle_compras
+    BEGIN
+        UPDATE productos 
+        SET stock = stock + NEW.cantidad
+        WHERE id_producto = NEW.id_producto;
+    END;
     ''')
 
     conn.commit()
