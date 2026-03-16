@@ -7,7 +7,7 @@ def inicializar_tablas():
     cursor = conn.cursor()
 
     # ==========================================
-    # 1. TABLAS CATÁLOGO (Configuración base)
+    # 1. TABLAS CATÁLOGO
     # ==========================================
     cursor.execute('CREATE TABLE IF NOT EXISTS categorias (id_categoria INTEGER PRIMARY KEY AUTOINCREMENT, categoria TEXT NOT NULL)')
     
@@ -17,12 +17,11 @@ def inicializar_tablas():
     
     cursor.execute('CREATE TABLE IF NOT EXISTS formas_pago (id_forma_pago INTEGER PRIMARY KEY AUTOINCREMENT, forma_pago TEXT NOT NULL)')
 
-    # NUEVA: Tabla de Distribuidoras
     cursor.execute('''CREATE TABLE IF NOT EXISTS distribuidoras (
         id_distribuidora INTEGER PRIMARY KEY AUTOINCREMENT, 
         nombre TEXT NOT NULL, 
         telefono TEXT,
-        comision REAL DEFAULT 0
+        comision_porcentaje REAL DEFAULT 0
     )''')
 
     # ==========================================
@@ -46,128 +45,93 @@ def inicializar_tablas():
     )''')
 
     # ==========================================
-    # 3. ACTUALIZACIÓN DE TABLA VENTAS (Estructura POS)
+    # 3. ACTUALIZACIÓN DE TABLA VENTAS
     # ==========================================
-    # Ejecutamos ALTER TABLE uno por uno para evitar errores de sintaxis
     columnas_nuevas = [
         "ALTER TABLE ventas ADD COLUMN id_empleado INTEGER REFERENCES empleados(id_empleado)",
         "ALTER TABLE ventas ADD COLUMN id_forma_pago INTEGER REFERENCES formas_pago(id_forma_pago)",
         "ALTER TABLE ventas ADD COLUMN tipo_venta TEXT DEFAULT 'CRÉDITO'",
         "ALTER TABLE ventas ADD COLUMN estatus_pago TEXT DEFAULT 'PAGADO'",
-        "ALTER TABLE ventas ADD COLUMN id_distribuidora INTEGER REFERENCES distribuidoras(id_distribuidora)",
-        "ALTER TABLE ventas ADD COLUMN comision_monto REAL DEFAULT 0"
+        "ALTER TABLE ventas ADD COLUMN id_distribuidora INTEGER REFERENCES distribuidoras(id_distribuidora)"
     ]
 
     for query in columnas_nuevas:
         try:
             cursor.execute(query)
         except sqlite3.OperationalError:
-            pass # Ignora si la columna ya existe
+            pass 
 
-    # Sincronización de datos históricos de los Excel
-    # Todo lo migrado es CRÉDITO. El estatus depende del adeudo.
+    # Sincronización de datos históricos
     cursor.execute("UPDATE ventas SET tipo_venta = 'CRÉDITO' WHERE tipo_venta IS NULL")
     cursor.execute("UPDATE ventas SET estatus_pago = 'PENDIENTE' WHERE adeudo > 0")
     cursor.execute("UPDATE ventas SET estatus_pago = 'PAGADO' WHERE adeudo <= 0 OR adeudo IS NULL")
 
     # ==========================================
-    # 4. DETALLES (Movimientos)
+    # 4. TABLA INDEPENDIENTE DE COMISIONES (Tu solución al conflicto)
     # ==========================================
-    cursor.execute('''CREATE TABLE IF NOT EXISTS detalle_compras (
-        id_detalle INTEGER PRIMARY KEY AUTOINCREMENT, 
-        folio_compra INTEGER, 
-        id_producto INTEGER, 
-        cantidad INTEGER, 
-        precio_compra REAL, 
-        FOREIGN KEY (folio_compra) REFERENCES compras (folio_compra), 
-        FOREIGN KEY (id_producto) REFERENCES productos (id_producto))''')
-
-    cursor.execute('''CREATE TABLE IF NOT EXISTS detalle_ventas (
-        id_detalle INTEGER PRIMARY KEY AUTOINCREMENT, 
-        id_venta INTEGER, 
-        id_producto INTEGER, 
-        cantidad INTEGER, 
-        precio_venta REAL, 
-        FOREIGN KEY (id_venta) REFERENCES ventas (id), 
-        FOREIGN KEY (id_producto) REFERENCES productos (id_producto))''')
+    # UNIQUE(id_venta) garantiza que solo exista UN registro de comisión por cada venta.
+    cursor.execute('''CREATE TABLE IF NOT EXISTS registro_comisiones (
+        id_comision INTEGER PRIMARY KEY AUTOINCREMENT,
+        id_venta INTEGER UNIQUE, 
+        id_distribuidora INTEGER,
+        monto_venta_total REAL,
+        monto_comision REAL,
+        fecha_registro TEXT,
+        estatus_pago_distribuidora TEXT DEFAULT 'PENDIENTE', 
+        FOREIGN KEY (id_venta) REFERENCES ventas (id),
+        FOREIGN KEY (id_distribuidora) REFERENCES distribuidoras (id_distribuidora)
+    )''')
 
     # ==========================================
-    # 5. RECURSOS HUMANOS
+    # 5. DETALLES Y RECURSOS HUMANOS
     # ==========================================
+    cursor.execute('''CREATE TABLE IF NOT EXISTS detalle_compras (id_detalle INTEGER PRIMARY KEY AUTOINCREMENT, folio_compra INTEGER, id_producto INTEGER, cantidad INTEGER, precio_compra REAL, FOREIGN KEY (folio_compra) REFERENCES compras (folio_compra), FOREIGN KEY (id_producto) REFERENCES productos (id_producto))''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS detalle_ventas (id_detalle INTEGER PRIMARY KEY AUTOINCREMENT, id_venta INTEGER, id_producto INTEGER, cantidad INTEGER, precio_venta REAL, FOREIGN KEY (id_venta) REFERENCES ventas (id), FOREIGN KEY (id_producto) REFERENCES productos (id_producto))''')
     cursor.execute('CREATE TABLE IF NOT EXISTS tipos_empleado (id_tipo INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT)')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS contratos (
-        id_contrato INTEGER PRIMARY KEY AUTOINCREMENT, 
-        id_empleado INTEGER, 
-        id_tipo INTEGER, 
-        fecha_inicio TEXT, 
-        fecha_fin TEXT, 
-        sueldo REAL, 
-        FOREIGN KEY (id_empleado) REFERENCES empleados (id_empleado), 
-        FOREIGN KEY (id_tipo) REFERENCES tipos_empleado (id_tipo))''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS contratos (id_contrato INTEGER PRIMARY KEY AUTOINCREMENT, id_empleado INTEGER, id_tipo INTEGER, fecha_inicio TEXT, fecha_fin TEXT, sueldo REAL, FOREIGN KEY (id_empleado) REFERENCES empleados (id_empleado), FOREIGN KEY (id_tipo) REFERENCES tipos_empleado (id_tipo))''')
 
     # ==========================================
-    # 6. VISTAS DE INTELIGENCIA (Reportes automáticos)
+    # 6. VISTAS DE INTELIGENCIA (REPORTES)
     # ==========================================
     
-    # Vista 1: Semáforo de Clientes (con JOIN de Pagos)
+    # Vista: Clasificación de Clientes (Semáforo)
     cursor.execute("DROP VIEW IF EXISTS clasificacion_clientes")
     cursor.execute('''
     CREATE VIEW clasificacion_clientes AS
-    SELECT 
-        id, nombre, telefono, (total_comprado - total_pagado) AS adeudo_actual,
-        CASE WHEN ultima_venta > ultimo_pago THEN ultima_venta ELSE ultimo_pago END AS ultima_actividad,
-        CASE 
-            WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago <= date('now', '-6 months') THEN 'ROJO'
-            WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago > date('now', '-6 months') THEN 'VERDE'
-            WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta >= date('now', '-1 year') THEN 'VERDE'
-            WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta < date('now', '-1 year') THEN 'AMARILLO'
-            ELSE 'SIN CLASIFICAR'
-        END AS tipo_cliente
-    FROM (
-        SELECT 
-            c.id, c.nombre, c.telefono,
-            IFNULL((SELECT SUM(total) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
-            IFNULL((SELECT MAX(fecha) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
-            IFNULL((SELECT SUM(p.monto) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), 0) AS total_pagado,
-            IFNULL((SELECT MAX(p.fecha) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), '2000-01-01') AS ultimo_pago
-        FROM clientes c
-    )
+    SELECT id, nombre, telefono, (total_comprado - total_pagado) AS adeudo_actual,
+    CASE WHEN ultima_venta > ultimo_pago THEN ultima_venta ELSE ultimo_pago END AS ultima_actividad,
+    CASE WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago <= date('now', '-6 months') THEN 'ROJO'
+         WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago > date('now', '-6 months') THEN 'VERDE'
+         WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta >= date('now', '-1 year') THEN 'VERDE'
+         WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta < date('now', '-1 year') THEN 'AMARILLO'
+         ELSE 'SIN CLASIFICAR' END AS tipo_cliente
+    FROM (SELECT c.id, c.nombre, c.telefono,
+          IFNULL((SELECT SUM(total) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
+          IFNULL((SELECT MAX(fecha) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
+          IFNULL((SELECT SUM(p.monto) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), 0) AS total_pagado,
+          IFNULL((SELECT MAX(p.fecha) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), '2000-01-01') AS ultimo_pago
+          FROM clientes c)
     ''')
 
-    # Vista 2: Reporte de Comisiones para Distribuidoras
-    cursor.execute("DROP VIEW IF EXISTS reporte_comisiones")
+    # Vista: Reporte de Comisiones Limpio (Una línea por venta)
+    cursor.execute("DROP VIEW IF EXISTS reporte_comisiones_limpio")
     cursor.execute('''
-    CREATE VIEW reporte_comisiones AS
-    SELECT 
-        v.id AS folio_venta,
-        v.fecha,
-        d.nombre AS distribuidora,
-        v.total AS monto_venta,
-        v.comision_monto AS comision_a_pagar,
-        (v.total - v.comision_monto) AS ingreso_neto_tienda
-    FROM ventas v
-    JOIN distribuidoras d ON v.id_distribuidora = d.id_distribuidora
+    CREATE VIEW reporte_comisiones_limpio AS
+    SELECT rc.id_comision, rc.fecha_registro, d.nombre AS distribuidora, rc.id_venta AS folio_nota,
+           rc.monto_venta_total, rc.monto_comision, rc.estatus_pago_distribuidora
+    FROM registro_comisiones rc
+    JOIN distribuidoras d ON rc.id_distribuidora = d.id_distribuidora
     ''')
 
     # ==========================================
-    # 7. TRIGGERS (Automatización de stock)
+    # 7. TRIGGERS (Automatización Inventario)
     # ==========================================
-    cursor.execute('''CREATE TRIGGER IF NOT EXISTS restar_inventario_por_venta 
-                      AFTER INSERT ON detalle_ventas 
-                      BEGIN UPDATE productos SET stock = stock - NEW.cantidad WHERE id_producto = NEW.id_producto; END''')
-    
-    cursor.execute('''CREATE TRIGGER IF NOT EXISTS sumar_inventario_por_compra 
-                      AFTER INSERT ON detalle_compras 
-                      BEGIN UPDATE productos SET stock = stock + NEW.cantidad WHERE id_producto = NEW.id_producto; END''')
+    cursor.execute('CREATE TRIGGER IF NOT EXISTS restar_inv AFTER INSERT ON detalle_ventas BEGIN UPDATE productos SET stock = stock - NEW.cantidad WHERE id_producto = NEW.id_producto; END')
+    cursor.execute('CREATE TRIGGER IF NOT EXISTS sumar_inv AFTER INSERT ON detalle_compras BEGIN UPDATE productos SET stock = stock + NEW.cantidad WHERE id_producto = NEW.id_producto; END')
 
     conn.commit()
     conn.close()
-    print("--- ESTRUCTURA COMPLETADA CON ÉXITO ---")
-    print("1. Tablas catálogo y RRHH listas.")
-    print("2. Soporte para Distribuidoras y Comisiones activo.")
-    print("3. Vistas de clasificación y comisiones creadas.")
-    print("4. Triggers de inventario funcionando.")
+    print("¡Base de datos sincronizada con tabla de comisiones independiente!")
 
 if __name__ == "__main__":
     inicializar_tablas()
