@@ -50,6 +50,7 @@ def inicializar_tablas():
         id_categoria INTEGER,
         descripcion TEXT,
         precio REAL,
+        stock INTEGER DEFAULT 0, -- Agregamos el stock para el inventario
         FOREIGN KEY (id_categoria) REFERENCES categorias (id_categoria)
     )''')
 
@@ -62,10 +63,29 @@ def inicializar_tablas():
     )''')
 
     # ==========================================
-    # 3. DETALLES (Relaciones muchos a muchos del diagrama)
+    # 3. ACTUALIZACIÓN DE LA TABLA VENTAS EXISTENTE
+    # ==========================================
+    # Inyectamos las columnas necesarias para el nuevo POS sin borrar los datos viejos
+    
+    columnas_nuevas = [
+        "ALTER TABLE ventas ADD COLUMN rfc_empleado TEXT REFERENCES empleados(rfc);",
+        "ALTER TABLE ventas ADD COLUMN id_forma_pago INTEGER REFERENCES formas_pago(id_forma_pago);",
+        "ALTER TABLE ventas ADD COLUMN estatus_pago TEXT DEFAULT 'PENDIENTE';"
+    ]
+
+    for query in columnas_nuevas:
+        try:
+            cursor.execute(query)
+        except sqlite3.OperationalError:
+            # Si corres el script 2 veces, SQLite dará un error porque la columna ya existe.
+            # Este except simplemente ignora el error y continúa.
+            pass
+
+    # ==========================================
+    # 4. DETALLES (Relaciones muchos a muchos)
     # ==========================================
     
-    # Detalle de qué productos llegaron en cada compra al proveedor
+    # Detalle de qué productos llegaron en cada compra
     cursor.execute('''CREATE TABLE IF NOT EXISTS detalle_compras (
         id_detalle INTEGER PRIMARY KEY AUTOINCREMENT,
         folio_compra INTEGER,
@@ -76,8 +96,7 @@ def inicializar_tablas():
         FOREIGN KEY (id_producto) REFERENCES productos (id_producto)
     )''')
 
-    # Detalle de qué productos se llevan en cada venta 
-    # (Se enlaza con tu tabla "ventas" existente)
+    # Detalle de qué productos se llevan en cada venta (El puente entre Ventas y Productos)
     cursor.execute('''CREATE TABLE IF NOT EXISTS detalle_ventas (
         id_detalle INTEGER PRIMARY KEY AUTOINCREMENT,
         id_venta INTEGER,
@@ -89,7 +108,7 @@ def inicializar_tablas():
     )''')
 
     # ==========================================
-    # 4. TABLAS DE RECURSOS HUMANOS (Del diagrama)
+    # 5. TABLAS DE RECURSOS HUMANOS 
     # ==========================================
     
     cursor.execute('''CREATE TABLE IF NOT EXISTS tipos_empleado (
@@ -110,7 +129,7 @@ def inicializar_tablas():
 
     conn.commit()
     conn.close()
-    print("¡Base de datos estructurada con las tablas del diagrama ER!")
+    print("¡Base de datos estructurada y tabla de ventas actualizada para el POS!")
 
 if __name__ == "__main__":
     inicializar_tablas()
