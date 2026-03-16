@@ -32,11 +32,6 @@ def inicializar_tablas():
         email TEXT
     )''')
 
-    cursor.execute('''CREATE TABLE IF NOT EXISTS tipos_cliente (
-        id_tipo INTEGER PRIMARY KEY AUTOINCREMENT,
-        tipo TEXT NOT NULL
-    )''')
-
     cursor.execute('''CREATE TABLE IF NOT EXISTS formas_pago (
         id_forma_pago INTEGER PRIMARY KEY AUTOINCREMENT,
         forma_pago TEXT NOT NULL
