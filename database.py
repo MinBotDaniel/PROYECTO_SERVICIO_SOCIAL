@@ -65,20 +65,18 @@ def inicializar_tablas():
     # ==========================================
     # 3. ACTUALIZACIÓN DE LA TABLA VENTAS EXISTENTE
     # ==========================================
-    # Inyectamos las columnas necesarias para el nuevo POS sin borrar los datos viejos
     
     columnas_nuevas = [
         "ALTER TABLE ventas ADD COLUMN rfc_empleado TEXT REFERENCES empleados(rfc);",
         "ALTER TABLE ventas ADD COLUMN id_forma_pago INTEGER REFERENCES formas_pago(id_forma_pago);",
-        "ALTER TABLE ventas ADD COLUMN estatus_pago TEXT DEFAULT 'PENDIENTE';"
+        "ALTER TABLE ventas ADD COLUMN tipo_venta TEXT DEFAULT 'CONTADO';",  # <-- ¡AQUÍ ESTÁ TU NUEVA COLUMNA!
+        "ALTER TABLE ventas ADD COLUMN estatus_pago TEXT DEFAULT 'PAGADO';"
     ]
 
     for query in columnas_nuevas:
         try:
             cursor.execute(query)
         except sqlite3.OperationalError:
-            # Si corres el script 2 veces, SQLite dará un error porque la columna ya existe.
-            # Este except simplemente ignora el error y continúa.
             pass
 
     # ==========================================
