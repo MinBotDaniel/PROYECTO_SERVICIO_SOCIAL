@@ -23,7 +23,8 @@ def inicializar_tablas():
     )''')
 
     cursor.execute('''CREATE TABLE IF NOT EXISTS empleados (
-        rfc TEXT PRIMARY KEY,
+        id_empleado INTEGER PRIMARY KEY AUTOINCREMENT,
+        rfc TEXT UNIQUE, -- Se guarda como información, pero ya no es la llave
         nombre TEXT NOT NULL,
         apaterno TEXT,
         amaterno TEXT,
@@ -67,9 +68,9 @@ def inicializar_tablas():
     # ==========================================
     
     columnas_nuevas = [
-        "ALTER TABLE ventas ADD COLUMN rfc_empleado TEXT REFERENCES empleados(rfc);",
+        "ALTER TABLE ventas ADD COLUMN id_empleado INTEGER REFERENCES empleados(id_empleado);", # ¡Aquí está el cambio!
         "ALTER TABLE ventas ADD COLUMN id_forma_pago INTEGER REFERENCES formas_pago(id_forma_pago);",
-        "ALTER TABLE ventas ADD COLUMN tipo_venta TEXT DEFAULT 'CONTADO';",  # <-- ¡AQUÍ ESTÁ TU NUEVA COLUMNA!
+        "ALTER TABLE ventas ADD COLUMN tipo_venta TEXT DEFAULT 'CONTADO';",
         "ALTER TABLE ventas ADD COLUMN estatus_pago TEXT DEFAULT 'PAGADO';"
     ]
 
@@ -116,12 +117,12 @@ def inicializar_tablas():
 
     cursor.execute('''CREATE TABLE IF NOT EXISTS contratos (
         id_contrato INTEGER PRIMARY KEY AUTOINCREMENT,
-        rfc_empleado TEXT,
+        id_empleado INTEGER,
         id_tipo INTEGER,
         fecha_inicio TEXT,
         fecha_fin TEXT,
         sueldo REAL,
-        FOREIGN KEY (rfc_empleado) REFERENCES empleados (rfc),
+        FOREIGN KEY (id_empleado) REFERENCES empleados (id_empleado),
         FOREIGN KEY (id_tipo) REFERENCES tipos_empleado (id_tipo)
     )''')
 
