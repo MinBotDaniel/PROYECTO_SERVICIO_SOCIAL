@@ -22,7 +22,6 @@ def main(page: ft.Page):
         monto REAL, 
         fecha TEXT
     )''')
-    # AQUI CORREGIMOS EL NOMBRE A comision
     conn.execute('''CREATE TABLE IF NOT EXISTS distribuidoras (
         id_distribuidora INTEGER PRIMARY KEY AUTOINCREMENT, 
         nombre TEXT NOT NULL, 
@@ -42,7 +41,6 @@ def main(page: ft.Page):
         estatus_pago_distribuidora TEXT DEFAULT 'PENDIENTE'
     )''')
     
-    # Intentar agregar columnas si venimos de versiones anteriores
     try: 
         conn.execute("ALTER TABLE ventas ADD COLUMN id_distribuidora INTEGER")
     except: 
@@ -50,7 +48,6 @@ def main(page: ft.Page):
     
     try: 
         conn.execute("ALTER TABLE registro_comisiones ADD COLUMN adeudo_comision REAL")
-        # Si se acaba de crear, igualamos el adeudo a la comisión inicial
         conn.execute("UPDATE registro_comisiones SET adeudo_comision = monto_comision WHERE adeudo_comision IS NULL")
     except: 
         pass
@@ -100,8 +97,12 @@ def main(page: ft.Page):
     }
 
     # ==========================================
-    # MÓDULO 1: CLIENTES (Gris)
+    # MÓDULO 1: CLIENTES (Gris) — CRUD COMPLETO
     # ==========================================
+    
+    # Estado para edición de clientes
+    estado_cliente_edit = {"id": None}
+
     def agregar_cliente_click(e):
         if not txt_nombre.value or not txt_telefono.value:
             page.snack_bar = ft.SnackBar(ft.Text("Campos obligatorios vacíos"))
@@ -112,17 +113,27 @@ def main(page: ft.Page):
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO clientes (nombre, domicilio, telefono) VALUES (?, ?, ?)", 
-                (txt_nombre.value, txt_domicilio.value, txt_telefono.value)
-            )
+            if estado_cliente_edit["id"] is not None:
+                # MODO EDICIÓN
+                cursor.execute(
+                    "UPDATE clientes SET nombre=?, domicilio=?, telefono=? WHERE id=?", 
+                    (txt_nombre.value, txt_domicilio.value, txt_telefono.value, estado_cliente_edit["id"])
+                )
+                page.snack_bar = ft.SnackBar(ft.Text("¡Cliente actualizado con éxito!"))
+                estado_cliente_edit["id"] = None
+                btn_guardar_cliente.content = ft.Text("Guardar Cliente")
+            else:
+                # MODO NUEVO
+                cursor.execute(
+                    "INSERT INTO clientes (nombre, domicilio, telefono) VALUES (?, ?, ?)", 
+                    (txt_nombre.value, txt_domicilio.value, txt_telefono.value)
+                )
+                page.snack_bar = ft.SnackBar(ft.Text("¡Cliente guardado con éxito!"))
             conn.commit()
             
             txt_nombre.value = ""
             txt_domicilio.value = ""
             txt_telefono.value = ""
-            
-            page.snack_bar = ft.SnackBar(ft.Text("¡Cliente guardado con éxito!"))
             page.snack_bar.open = True
             cargar_clasificacion() 
         except Exception as ex:
@@ -131,38 +142,123 @@ def main(page: ft.Page):
             conn.close()
             page.update()
 
+    def editar_cliente(id_c, nombre, domicilio, telefono):
+        estado_cliente_edit["id"] = id_c
+        txt_nombre.value = nombre
+        txt_domicilio.value = domicilio or ""
+        txt_telefono.value = telefono or ""
+        btn_guardar_cliente.content = ft.Text("Actualizar Cliente")
+        page.update()
+
+    def eliminar_cliente(id_c, nombre):
+        def confirmar(e):
+            dlg.open = False
+            conn = get_db_connection()
+            try:
+                conn.execute("DELETE FROM clientes WHERE id=?", (id_c,))
+                conn.commit()
+                page.snack_bar = ft.SnackBar(ft.Text(f"Cliente '{nombre}' eliminado."))
+                page.snack_bar.open = True
+                cargar_clasificacion()
+            except Exception as ex:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Error al eliminar: {ex}"))
+                page.snack_bar.open = True
+            finally:
+                conn.close()
+                page.update()
+
+        def cancelar(e):
+            dlg.open = False
+            page.update()
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("Confirmar Eliminación"),
+            content=ft.Text(f"¿Eliminar al cliente '{nombre}'? Esta acción no se puede deshacer."),
+            actions=[
+                ft.TextButton("Cancelar", on_click=cancelar),
+                ft.TextButton("Eliminar", on_click=confirmar, style=ft.ButtonStyle(color="red")),
+            ]
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
     def cargar_clasificacion(filtro=""):
         tabla_clientes.rows.clear()
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
+            # SINCRONIZADO CON LA VISTA DE LA BASE DE DATOS
             query = """
-                SELECT c.id, c.nombre, IFNULL(SUM(v.adeudo), 0) AS adeudo_total
+                SELECT 
+                    c.id,
+                    c.nombre,
+                    c.domicilio,
+                    c.telefono,
+                    IFNULL((SELECT SUM(total) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
+                    IFNULL((SELECT SUM(p.monto) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), 0) AS total_pagado,
+                    IFNULL((SELECT MAX(fecha) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
+                    IFNULL((SELECT MAX(p.fecha) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), '2000-01-01') AS ultimo_pago
                 FROM clientes c
-                LEFT JOIN ventas v ON c.id = v.cliente_id
             """
-            if filtro == "":
-                query += " GROUP BY c.id ORDER BY c.nombre"
-                cursor.execute(query)
-            else:
-                query += " WHERE c.nombre LIKE ? GROUP BY c.id ORDER BY c.nombre"
+            if filtro:
+                query += " WHERE c.nombre LIKE ? ORDER BY c.nombre"
                 cursor.execute(query, ('%'+filtro+'%',))
+            else:
+                query += " ORDER BY c.nombre"
+                cursor.execute(query)
                 
             for r in cursor.fetchall():
-                nombre_cliente = r[1]
-                adeudo_val = r[2]
-                
-                # Clasificación Automática de Colores
-                if adeudo_val <= 0:
-                    tipo_cliente = "VERDE"
-                    color_v = "green"
-                elif adeudo_val > 0 and adeudo_val <= 1500:
-                    tipo_cliente = "AMARILLO"
-                    color_v = "orange"
+                id_c, nombre_c, domicilio_c, telefono_c = r[0], r[1], r[2], r[3]
+                total_comprado, total_pagado = r[4], r[5]
+                ultima_venta, ultimo_pago = r[6], r[7]
+
+                adeudo_val = total_comprado - total_pagado
+
+                # CLASIFICACIÓN SINCRONIZADA CON LA VISTA clasificacion_clientes de database1.py
+                if adeudo_val > 0 and ultimo_pago <= "2000-01-01":
+                    # Sin pagos desde hace mucho
+                    from datetime import datetime, timedelta
+                    dos_anos = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
+                    seis_meses = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+                    un_ano = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+                    if ultimo_pago <= dos_anos:
+                        tipo_cliente = "ROJO"
+                        color_v = "red"
+                    elif ultimo_pago >= seis_meses:
+                        tipo_cliente = "VERDE"
+                        color_v = "green"
+                    elif adeudo_val > 0 and ultimo_pago < seis_meses:
+                        tipo_cliente = "AMARILLO"
+                        color_v = "orange"
+                    else:
+                        tipo_cliente = "SIN CLASIFICAR"
+                        color_v = "grey"
                 else:
-                    tipo_cliente = "ROJO"
-                    color_v = "red"
-                
+                    from datetime import datetime, timedelta
+                    dos_anos = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
+                    seis_meses = (datetime.now() - timedelta(days=180)).strftime('%Y-%m-%d')
+                    un_ano = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+
+                    if adeudo_val > 0 and ultimo_pago <= dos_anos:
+                        tipo_cliente = "ROJO"
+                        color_v = "red"
+                    elif adeudo_val > 0 and ultimo_pago >= seis_meses:
+                        tipo_cliente = "VERDE"
+                        color_v = "green"
+                    elif adeudo_val <= 0 and ultima_venta >= un_ano:
+                        tipo_cliente = "VERDE"
+                        color_v = "green"
+                    elif adeudo_val > 0 and ultimo_pago < seis_meses:
+                        tipo_cliente = "AMARILLO"
+                        color_v = "orange"
+                    elif adeudo_val <= 0 and ultima_venta <= dos_anos:
+                        tipo_cliente = "AMARILLO"
+                        color_v = "orange"
+                    else:
+                        tipo_cliente = "SIN CLASIFICAR"
+                        color_v = "grey"
+
                 # Texto de Estado de Cuenta
                 if adeudo_val > 0: 
                     txt_adeudo = f"Debe: ${adeudo_val:.2f}"
@@ -174,12 +270,22 @@ def main(page: ft.Page):
                     txt_adeudo = "$0.00"
                     color_adeudo = "black"
 
+                btn_edit = ft.IconButton(
+                    icon=ft.Icons.EDIT, icon_color="blue", tooltip="Editar",
+                    on_click=lambda ev, ic=id_c, nc=nombre_c, dc=domicilio_c, tc=telefono_c: editar_cliente(ic, nc, dc, tc)
+                )
+                btn_del = ft.IconButton(
+                    icon=ft.Icons.DELETE, icon_color="red", tooltip="Eliminar",
+                    on_click=lambda ev, ic=id_c, nc=nombre_c: eliminar_cliente(ic, nc)
+                )
+
                 tabla_clientes.rows.append(
                     ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(str(nombre_cliente))), 
+                        ft.DataCell(ft.Text(str(nombre_c))), 
                         ft.DataCell(ft.Text(txt_adeudo, color=color_adeudo, weight="bold")),
                         ft.DataCell(ft.Text("●", color=color_v, size=20)), 
                         ft.DataCell(ft.Text(tipo_cliente)),
+                        ft.DataCell(ft.Row([btn_edit, btn_del], tight=True)),
                     ])
                 )
         except Exception as ex:
@@ -200,7 +306,8 @@ def main(page: ft.Page):
             ft.DataColumn(ft.Text("Nombre")), 
             ft.DataColumn(ft.Text("Estado de Cuenta")), 
             ft.DataColumn(ft.Text("Status")), 
-            ft.DataColumn(ft.Text("Clasificación"))
+            ft.DataColumn(ft.Text("Clasificación")),
+            ft.DataColumn(ft.Text("Acciones")),
         ], 
         rows=[]
     )
@@ -209,7 +316,7 @@ def main(page: ft.Page):
         ft.Text("Inteligencia de Clientes", size=25, weight="bold"),
         ft.Container(
             content=ft.Column([
-                ft.Text("Nuevo Registro"), 
+                ft.Text("Nuevo Registro / Edición"), 
                 ft.Row([txt_nombre, txt_telefono]), 
                 ft.Row([txt_domicilio, btn_guardar_cliente])
             ]), 
@@ -218,12 +325,15 @@ def main(page: ft.Page):
             border_radius=10
         ),
         txt_buscar_cliente, 
-        ft.Column([tabla_clientes], scroll="always", height=300)
+        ft.Column([tabla_clientes], scroll="always", height=350)
     ])
 
     # ==========================================
-    # MÓDULO 2: INVENTARIO (Azul)
+    # MÓDULO 2: INVENTARIO (Azul) — CRUD COMPLETO + VALIDACIÓN STOCK
     # ==========================================
+
+    estado_prod_edit = {"id": None}
+
     def agregar_producto_click(e):
         if not txt_desc_prod.value or not txt_precio_prod.value: 
             page.snack_bar = ft.SnackBar(ft.Text("Descripción y Precio son obligatorios"))
@@ -234,17 +344,27 @@ def main(page: ft.Page):
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO productos (id_categoria, descripcion, precio, stock) VALUES (1, ?, ?, ?)", 
-                (txt_desc_prod.value, float(txt_precio_prod.value), int(txt_stock_prod.value or 0))
-            )
+            if estado_prod_edit["id"] is not None:
+                # MODO EDICIÓN
+                cursor.execute(
+                    "UPDATE productos SET descripcion=?, precio=?, stock=? WHERE id_producto=?", 
+                    (txt_desc_prod.value, float(txt_precio_prod.value), int(txt_stock_prod.value or 0), estado_prod_edit["id"])
+                )
+                page.snack_bar = ft.SnackBar(ft.Text("¡Producto actualizado!"))
+                estado_prod_edit["id"] = None
+                btn_guardar_prod.content = ft.Text("Guardar Producto")
+            else:
+                # MODO NUEVO
+                cursor.execute(
+                    "INSERT INTO productos (id_categoria, descripcion, precio, stock) VALUES (1, ?, ?, ?)", 
+                    (txt_desc_prod.value, float(txt_precio_prod.value), int(txt_stock_prod.value or 0))
+                )
+                page.snack_bar = ft.SnackBar(ft.Text("¡Producto agregado al inventario!"))
             conn.commit()
             
             txt_desc_prod.value = ""
             txt_precio_prod.value = ""
             txt_stock_prod.value = ""
-            
-            page.snack_bar = ft.SnackBar(ft.Text("¡Producto agregado al inventario!"))
             page.snack_bar.open = True
             cargar_inventario()
         except Exception as ex:
@@ -253,23 +373,77 @@ def main(page: ft.Page):
             conn.close()
             page.update()
 
+    def editar_producto(id_p, desc, precio, stock):
+        estado_prod_edit["id"] = id_p
+        txt_desc_prod.value = desc
+        txt_precio_prod.value = str(precio)
+        txt_stock_prod.value = str(stock)
+        btn_guardar_prod.content = ft.Text("Actualizar Producto")
+        page.update()
+
+    def eliminar_producto(id_p, desc):
+        def confirmar(e):
+            dlg.open = False
+            conn = get_db_connection()
+            try:
+                conn.execute("DELETE FROM productos WHERE id_producto=?", (id_p,))
+                conn.commit()
+                page.snack_bar = ft.SnackBar(ft.Text(f"Producto '{desc}' eliminado."))
+                page.snack_bar.open = True
+                cargar_inventario()
+            except Exception as ex:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Error al eliminar: {ex}"))
+                page.snack_bar.open = True
+            finally:
+                conn.close()
+                page.update()
+
+        def cancelar(e):
+            dlg.open = False
+            page.update()
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("Confirmar Eliminación"),
+            content=ft.Text(f"¿Eliminar el producto '{desc}'?"),
+            actions=[
+                ft.TextButton("Cancelar", on_click=cancelar),
+                ft.TextButton("Eliminar", on_click=confirmar, style=ft.ButtonStyle(color="red")),
+            ]
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
     def cargar_inventario(filtro=""):
         tabla_productos.rows.clear()
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
             if filtro == "": 
-                cursor.execute("SELECT descripcion, precio, stock FROM productos ORDER BY descripcion")
+                cursor.execute("SELECT id_producto, descripcion, precio, stock FROM productos ORDER BY descripcion")
             else: 
-                cursor.execute("SELECT descripcion, precio, stock FROM productos WHERE descripcion LIKE ? ORDER BY descripcion", ('%'+filtro+'%',))
+                cursor.execute("SELECT id_producto, descripcion, precio, stock FROM productos WHERE descripcion LIKE ? ORDER BY descripcion", ('%'+filtro+'%',))
                 
             for r in cursor.fetchall():
-                color_stock = "red" if r[2] < 5 else "black"
+                id_p, desc, precio, stock = r[0], r[1], r[2], r[3]
+                color_stock = "red" if stock < 5 else "black"
+                stock_txt = f"{stock} ⚠️ SIN STOCK" if stock == 0 else str(stock)
+
+                btn_edit = ft.IconButton(
+                    icon=ft.Icons.EDIT, icon_color="blue", tooltip="Editar",
+                    on_click=lambda ev, ip=id_p, d=desc, pr=precio, s=stock: editar_producto(ip, d, pr, s)
+                )
+                btn_del = ft.IconButton(
+                    icon=ft.Icons.DELETE, icon_color="red", tooltip="Eliminar",
+                    on_click=lambda ev, ip=id_p, d=desc: eliminar_producto(ip, d)
+                )
+
                 tabla_productos.rows.append(
                     ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(str(r[0]))), 
-                        ft.DataCell(ft.Text(f"${r[1]:.2f}")), 
-                        ft.DataCell(ft.Text(str(r[2]), color=color_stock, weight="bold"))
+                        ft.DataCell(ft.Text(str(desc))), 
+                        ft.DataCell(ft.Text(f"${precio:.2f}")), 
+                        ft.DataCell(ft.Text(stock_txt, color=color_stock, weight="bold")),
+                        ft.DataCell(ft.Row([btn_edit, btn_del], tight=True)),
                     ])
                 )
         except Exception as ex:
@@ -289,7 +463,8 @@ def main(page: ft.Page):
         columns=[
             ft.DataColumn(ft.Text("Producto")), 
             ft.DataColumn(ft.Text("Precio")), 
-            ft.DataColumn(ft.Text("Existencias"))
+            ft.DataColumn(ft.Text("Existencias")),
+            ft.DataColumn(ft.Text("Acciones")),
         ], 
         rows=[]
     )
@@ -298,7 +473,7 @@ def main(page: ft.Page):
         ft.Text("Gestión de Inventario", size=25, weight="bold"),
         ft.Container(
             content=ft.Column([
-                ft.Text("Registrar Nuevo Producto"), 
+                ft.Text("Registrar / Editar Producto"), 
                 ft.Row([txt_desc_prod, txt_precio_prod, txt_stock_prod]), 
                 ft.Row([btn_guardar_prod])
             ]), 
@@ -307,12 +482,15 @@ def main(page: ft.Page):
             border_radius=10
         ), 
         txt_buscar_prod, 
-        ft.Column([tabla_productos], scroll="always", height=300)
+        ft.Column([tabla_productos], scroll="always", height=350)
     ])
 
     # ==========================================
-    # MÓDULO 3: EMPLEADOS (Verde Claro)
+    # MÓDULO 3: EMPLEADOS (Verde Claro) — CRUD COMPLETO
     # ==========================================
+
+    estado_emp_edit = {"id": None}
+
     def agregar_empleado_click(e):
         if not txt_nombre_emp.value: 
             page.snack_bar = ft.SnackBar(ft.Text("El nombre es obligatorio"))
@@ -323,10 +501,22 @@ def main(page: ft.Page):
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO empleados (nombre, apaterno, amaterno, rfc, telefono, email) VALUES (?, ?, ?, ?, ?, ?)", 
-                (txt_nombre_emp.value, txt_apaterno_emp.value, txt_amaterno_emp.value, txt_rfc_emp.value, txt_tel_emp.value, txt_email_emp.value)
-            )
+            if estado_emp_edit["id"] is not None:
+                # MODO EDICIÓN
+                cursor.execute(
+                    "UPDATE empleados SET nombre=?, apaterno=?, amaterno=?, rfc=?, telefono=?, email=? WHERE id_empleado=?", 
+                    (txt_nombre_emp.value, txt_apaterno_emp.value, txt_amaterno_emp.value, txt_rfc_emp.value, txt_tel_emp.value, txt_email_emp.value, estado_emp_edit["id"])
+                )
+                page.snack_bar = ft.SnackBar(ft.Text("¡Empleado actualizado!"))
+                estado_emp_edit["id"] = None
+                btn_guardar_emp.content = ft.Text("Guardar")
+            else:
+                # MODO NUEVO
+                cursor.execute(
+                    "INSERT INTO empleados (nombre, apaterno, amaterno, rfc, telefono, email) VALUES (?, ?, ?, ?, ?, ?)", 
+                    (txt_nombre_emp.value, txt_apaterno_emp.value, txt_amaterno_emp.value, txt_rfc_emp.value, txt_tel_emp.value, txt_email_emp.value)
+                )
+                page.snack_bar = ft.SnackBar(ft.Text("¡Empleado registrado con éxito!"))
             conn.commit()
             
             txt_nombre_emp.value = ""
@@ -335,8 +525,6 @@ def main(page: ft.Page):
             txt_rfc_emp.value = ""
             txt_tel_emp.value = ""
             txt_email_emp.value = ""
-            
-            page.snack_bar = ft.SnackBar(ft.Text("¡Empleado registrado con éxito!"))
             page.snack_bar.open = True
             cargar_empleados()
         except sqlite3.IntegrityError:
@@ -348,22 +536,79 @@ def main(page: ft.Page):
             conn.close()
             page.update()
 
+    def editar_empleado(id_e, nombre, apaterno, amaterno, rfc, telefono, email):
+        estado_emp_edit["id"] = id_e
+        txt_nombre_emp.value = nombre or ""
+        txt_apaterno_emp.value = apaterno or ""
+        txt_amaterno_emp.value = amaterno or ""
+        txt_rfc_emp.value = rfc or ""
+        txt_tel_emp.value = telefono or ""
+        txt_email_emp.value = email or ""
+        btn_guardar_emp.content = ft.Text("Actualizar")
+        page.update()
+
+    def eliminar_empleado(id_e, nombre):
+        def confirmar(e):
+            dlg.open = False
+            conn = get_db_connection()
+            try:
+                conn.execute("DELETE FROM empleados WHERE id_empleado=?", (id_e,))
+                conn.commit()
+                page.snack_bar = ft.SnackBar(ft.Text(f"Empleado '{nombre}' eliminado."))
+                page.snack_bar.open = True
+                cargar_empleados()
+            except Exception as ex:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Error al eliminar: {ex}"))
+                page.snack_bar.open = True
+            finally:
+                conn.close()
+                page.update()
+
+        def cancelar(e):
+            dlg.open = False
+            page.update()
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("Confirmar Eliminación"),
+            content=ft.Text(f"¿Eliminar al empleado '{nombre}'?"),
+            actions=[
+                ft.TextButton("Cancelar", on_click=cancelar),
+                ft.TextButton("Eliminar", on_click=confirmar, style=ft.ButtonStyle(color="red")),
+            ]
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
     def cargar_empleados(filtro=""):
         tabla_empleados.rows.clear()
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
             if filtro == "": 
-                cursor.execute("SELECT nombre || ' ' || IFNULL(apaterno,'') AS nombre_completo, rfc, telefono FROM empleados ORDER BY nombre")
+                cursor.execute("SELECT id_empleado, nombre, apaterno, amaterno, rfc, telefono, email FROM empleados ORDER BY nombre")
             else: 
-                cursor.execute("SELECT nombre || ' ' || IFNULL(apaterno,'') AS nombre_completo, rfc, telefono FROM empleados WHERE nombre LIKE ? ORDER BY nombre", ('%'+filtro+'%',))
+                cursor.execute("SELECT id_empleado, nombre, apaterno, amaterno, rfc, telefono, email FROM empleados WHERE nombre LIKE ? ORDER BY nombre", ('%'+filtro+'%',))
                 
-            for r in cursor.fetchall(): 
+            for r in cursor.fetchall():
+                id_e, nombre, apaterno, amaterno, rfc, telefono, email = r
+                nombre_completo = f"{nombre} {apaterno or ''} {amaterno or ''}".strip()
+
+                btn_edit = ft.IconButton(
+                    icon=ft.Icons.EDIT, icon_color="blue", tooltip="Editar",
+                    on_click=lambda ev, ie=id_e, n=nombre, ap=apaterno, am=amaterno, rf=rfc, t=telefono, em=email: editar_empleado(ie, n, ap, am, rf, t, em)
+                )
+                btn_del = ft.IconButton(
+                    icon=ft.Icons.DELETE, icon_color="red", tooltip="Eliminar",
+                    on_click=lambda ev, ie=id_e, n=nombre_completo: eliminar_empleado(ie, n)
+                )
+
                 tabla_empleados.rows.append(
                     ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(str(r[0]).strip())), 
-                        ft.DataCell(ft.Text(str(r[1] or 'S/N'))), 
-                        ft.DataCell(ft.Text(str(r[2] or 'S/N')))
+                        ft.DataCell(ft.Text(nombre_completo)), 
+                        ft.DataCell(ft.Text(str(rfc or 'S/N'))), 
+                        ft.DataCell(ft.Text(str(telefono or 'S/N'))),
+                        ft.DataCell(ft.Row([btn_edit, btn_del], tight=True)),
                     ])
                 )
         except Exception as ex: 
@@ -386,7 +631,8 @@ def main(page: ft.Page):
         columns=[
             ft.DataColumn(ft.Text("Nombre")), 
             ft.DataColumn(ft.Text("RFC")), 
-            ft.DataColumn(ft.Text("Teléfono"))
+            ft.DataColumn(ft.Text("Teléfono")),
+            ft.DataColumn(ft.Text("Acciones")),
         ], 
         rows=[]
     )
@@ -404,12 +650,15 @@ def main(page: ft.Page):
             border_radius=10
         ), 
         txt_buscar_emp, 
-        ft.Column([tabla_empleados], scroll="always", height=250)
+        ft.Column([tabla_empleados], scroll="always", height=300)
     ])
 
     # ==========================================
-    # MÓDULO 4: PROVEEDORES (Naranja)
+    # MÓDULO 4: PROVEEDORES (Naranja) — CRUD COMPLETO
     # ==========================================
+
+    estado_prov_edit = {"id": None}
+
     def agregar_proveedor_click(e):
         if not txt_nombre_prov.value: 
             page.snack_bar = ft.SnackBar(ft.Text("El nombre es obligatorio"))
@@ -420,17 +669,27 @@ def main(page: ft.Page):
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO proveedores (nombre, telefono, email) VALUES (?, ?, ?)", 
-                (txt_nombre_prov.value, txt_tel_prov.value, txt_email_prov.value)
-            )
+            if estado_prov_edit["id"] is not None:
+                # MODO EDICIÓN
+                cursor.execute(
+                    "UPDATE proveedores SET nombre=?, telefono=?, email=? WHERE id_proveedor=?", 
+                    (txt_nombre_prov.value, txt_tel_prov.value, txt_email_prov.value, estado_prov_edit["id"])
+                )
+                page.snack_bar = ft.SnackBar(ft.Text("¡Proveedor actualizado!"))
+                estado_prov_edit["id"] = None
+                btn_guardar_prov.content = ft.Text("Guardar")
+            else:
+                # MODO NUEVO
+                cursor.execute(
+                    "INSERT INTO proveedores (nombre, telefono, email) VALUES (?, ?, ?)", 
+                    (txt_nombre_prov.value, txt_tel_prov.value, txt_email_prov.value)
+                )
+                page.snack_bar = ft.SnackBar(ft.Text("¡Proveedor guardado!"))
             conn.commit()
             
             txt_nombre_prov.value = ""
             txt_tel_prov.value = ""
             txt_email_prov.value = ""
-            
-            page.snack_bar = ft.SnackBar(ft.Text("¡Proveedor guardado!"))
             page.snack_bar.open = True
             cargar_proveedores()
         except Exception as ex: 
@@ -439,22 +698,75 @@ def main(page: ft.Page):
             conn.close()
             page.update()
 
+    def editar_proveedor(id_p, nombre, telefono, email):
+        estado_prov_edit["id"] = id_p
+        txt_nombre_prov.value = nombre or ""
+        txt_tel_prov.value = telefono or ""
+        txt_email_prov.value = email or ""
+        btn_guardar_prov.content = ft.Text("Actualizar")
+        page.update()
+
+    def eliminar_proveedor(id_p, nombre):
+        def confirmar(e):
+            dlg.open = False
+            conn = get_db_connection()
+            try:
+                conn.execute("DELETE FROM proveedores WHERE id_proveedor=?", (id_p,))
+                conn.commit()
+                page.snack_bar = ft.SnackBar(ft.Text(f"Proveedor '{nombre}' eliminado."))
+                page.snack_bar.open = True
+                cargar_proveedores()
+            except Exception as ex:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Error al eliminar: {ex}"))
+                page.snack_bar.open = True
+            finally:
+                conn.close()
+                page.update()
+
+        def cancelar(e):
+            dlg.open = False
+            page.update()
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("Confirmar Eliminación"),
+            content=ft.Text(f"¿Eliminar al proveedor '{nombre}'?"),
+            actions=[
+                ft.TextButton("Cancelar", on_click=cancelar),
+                ft.TextButton("Eliminar", on_click=confirmar, style=ft.ButtonStyle(color="red")),
+            ]
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
     def cargar_proveedores(filtro=""):
         tabla_proveedores.rows.clear()
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
             if filtro == "": 
-                cursor.execute("SELECT nombre, telefono, email FROM proveedores ORDER BY nombre")
+                cursor.execute("SELECT id_proveedor, nombre, telefono, email FROM proveedores ORDER BY nombre")
             else: 
-                cursor.execute("SELECT nombre, telefono, email FROM proveedores WHERE nombre LIKE ? ORDER BY nombre", ('%'+filtro+'%',))
+                cursor.execute("SELECT id_proveedor, nombre, telefono, email FROM proveedores WHERE nombre LIKE ? ORDER BY nombre", ('%'+filtro+'%',))
                 
-            for r in cursor.fetchall(): 
+            for r in cursor.fetchall():
+                id_p, nombre, telefono, email = r
+
+                btn_edit = ft.IconButton(
+                    icon=ft.Icons.EDIT, icon_color="blue", tooltip="Editar",
+                    on_click=lambda ev, ip=id_p, n=nombre, t=telefono, em=email: editar_proveedor(ip, n, t, em)
+                )
+                btn_del = ft.IconButton(
+                    icon=ft.Icons.DELETE, icon_color="red", tooltip="Eliminar",
+                    on_click=lambda ev, ip=id_p, n=nombre: eliminar_proveedor(ip, n)
+                )
+
                 tabla_proveedores.rows.append(
                     ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(str(r[0]))), 
-                        ft.DataCell(ft.Text(str(r[1] or 'S/N'))), 
-                        ft.DataCell(ft.Text(str(r[2] or 'S/N')))
+                        ft.DataCell(ft.Text(str(nombre))), 
+                        ft.DataCell(ft.Text(str(telefono or 'S/N'))), 
+                        ft.DataCell(ft.Text(str(email or 'S/N'))),
+                        ft.DataCell(ft.Row([btn_edit, btn_del], tight=True)),
                     ])
                 )
         except Exception as ex: 
@@ -474,7 +786,8 @@ def main(page: ft.Page):
         columns=[
             ft.DataColumn(ft.Text("Proveedor")), 
             ft.DataColumn(ft.Text("Teléfono")), 
-            ft.DataColumn(ft.Text("Email"))
+            ft.DataColumn(ft.Text("Email")),
+            ft.DataColumn(ft.Text("Acciones")),
         ], 
         rows=[]
     )
@@ -491,12 +804,15 @@ def main(page: ft.Page):
             border_radius=10
         ), 
         txt_buscar_prov, 
-        ft.Column([tabla_proveedores], scroll="always", height=250)
+        ft.Column([tabla_proveedores], scroll="always", height=300)
     ])
 
     # ==========================================
-    # MÓDULO 5: DISTRIBUIDORAS (Amarillo)
+    # MÓDULO 5: DISTRIBUIDORAS (Amarillo) — CRUD COMPLETO
     # ==========================================
+
+    estado_dist_edit = {"id": None}
+
     def agregar_distribuidora_click(e):
         if not txt_nombre_dist.value or not txt_comision_dist.value: 
             page.snack_bar = ft.SnackBar(ft.Text("Nombre y Porcentaje son obligatorios"))
@@ -507,18 +823,27 @@ def main(page: ft.Page):
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-            # CORRECCIÓN: usamos comision en lugar de comision_porcentaje
-            cursor.execute(
-                "INSERT INTO distribuidoras (nombre, telefono, comision) VALUES (?, ?, ?)", 
-                (txt_nombre_dist.value, txt_tel_dist.value, float(txt_comision_dist.value))
-            )
+            if estado_dist_edit["id"] is not None:
+                # MODO EDICIÓN
+                cursor.execute(
+                    "UPDATE distribuidoras SET nombre=?, telefono=?, comision=? WHERE id_distribuidora=?", 
+                    (txt_nombre_dist.value, txt_tel_dist.value, float(txt_comision_dist.value), estado_dist_edit["id"])
+                )
+                page.snack_bar = ft.SnackBar(ft.Text("¡Distribuidora actualizada!"))
+                estado_dist_edit["id"] = None
+                btn_guardar_dist.content = ft.Text("Guardar")
+            else:
+                # MODO NUEVO
+                cursor.execute(
+                    "INSERT INTO distribuidoras (nombre, telefono, comision) VALUES (?, ?, ?)", 
+                    (txt_nombre_dist.value, txt_tel_dist.value, float(txt_comision_dist.value))
+                )
+                page.snack_bar = ft.SnackBar(ft.Text("¡Distribuidora guardada!"))
             conn.commit()
             
             txt_nombre_dist.value = ""
             txt_tel_dist.value = ""
             txt_comision_dist.value = ""
-            
-            page.snack_bar = ft.SnackBar(ft.Text("¡Distribuidora guardada!"))
             page.snack_bar.open = True
             cargar_distribuidoras()
         except Exception as ex: 
@@ -527,19 +852,71 @@ def main(page: ft.Page):
             conn.close()
             page.update()
 
+    def editar_distribuidora(id_d, nombre, telefono, comision):
+        estado_dist_edit["id"] = id_d
+        txt_nombre_dist.value = nombre or ""
+        txt_tel_dist.value = telefono or ""
+        txt_comision_dist.value = str(comision)
+        btn_guardar_dist.content = ft.Text("Actualizar")
+        page.update()
+
+    def eliminar_distribuidora(id_d, nombre):
+        def confirmar(e):
+            dlg.open = False
+            conn = get_db_connection()
+            try:
+                conn.execute("DELETE FROM distribuidoras WHERE id_distribuidora=?", (id_d,))
+                conn.commit()
+                page.snack_bar = ft.SnackBar(ft.Text(f"Distribuidora '{nombre}' eliminada."))
+                page.snack_bar.open = True
+                cargar_distribuidoras()
+            except Exception as ex:
+                page.snack_bar = ft.SnackBar(ft.Text(f"Error al eliminar: {ex}"))
+                page.snack_bar.open = True
+            finally:
+                conn.close()
+                page.update()
+
+        def cancelar(e):
+            dlg.open = False
+            page.update()
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("Confirmar Eliminación"),
+            content=ft.Text(f"¿Eliminar la distribuidora '{nombre}'?"),
+            actions=[
+                ft.TextButton("Cancelar", on_click=cancelar),
+                ft.TextButton("Eliminar", on_click=confirmar, style=ft.ButtonStyle(color="red")),
+            ]
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
     def cargar_distribuidoras():
         tabla_distribuidoras.rows.clear()
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
-            # CORRECCIÓN: usamos comision en lugar de comision_porcentaje
-            cursor.execute("SELECT nombre, telefono, comision FROM distribuidoras ORDER BY nombre")
-            for r in cursor.fetchall(): 
+            cursor.execute("SELECT id_distribuidora, nombre, telefono, comision FROM distribuidoras ORDER BY nombre")
+            for r in cursor.fetchall():
+                id_d, nombre, telefono, comision = r
+
+                btn_edit = ft.IconButton(
+                    icon=ft.Icons.EDIT, icon_color="blue", tooltip="Editar",
+                    on_click=lambda ev, id=id_d, n=nombre, t=telefono, c=comision: editar_distribuidora(id, n, t, c)
+                )
+                btn_del = ft.IconButton(
+                    icon=ft.Icons.DELETE, icon_color="red", tooltip="Eliminar",
+                    on_click=lambda ev, id=id_d, n=nombre: eliminar_distribuidora(id, n)
+                )
+
                 tabla_distribuidoras.rows.append(
                     ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(str(r[0]))), 
-                        ft.DataCell(ft.Text(str(r[1] or 'S/N'))), 
-                        ft.DataCell(ft.Text(f"{r[2]}%"))
+                        ft.DataCell(ft.Text(str(nombre))), 
+                        ft.DataCell(ft.Text(str(telefono or 'S/N'))), 
+                        ft.DataCell(ft.Text(f"{comision}%")),
+                        ft.DataCell(ft.Row([btn_edit, btn_del], tight=True)),
                     ])
                 )
         except Exception as ex:
@@ -558,7 +935,8 @@ def main(page: ft.Page):
         columns=[
             ft.DataColumn(ft.Text("Nombre")), 
             ft.DataColumn(ft.Text("Teléfono")), 
-            ft.DataColumn(ft.Text("Comisión"))
+            ft.DataColumn(ft.Text("Comisión")),
+            ft.DataColumn(ft.Text("Acciones")),
         ], 
         rows=[]
     )
@@ -574,7 +952,7 @@ def main(page: ft.Page):
             bgcolor="#fff9c4", 
             border_radius=10
         ), 
-        ft.Column([tabla_distribuidoras], scroll="always", height=250)
+        ft.Column([tabla_distribuidoras], scroll="always", height=300)
     ])
 
     # ==========================================
@@ -925,7 +1303,6 @@ def main(page: ft.Page):
             ft.ListTile(title=ft.Text("-- Venta Directa --", color="red"), on_click=lambda ev: seleccionar_distribuidora_pos(None, ""))
         )
         
-        # CORRECCIÓN: usamos comision en lugar de comision_porcentaje
         cursor.execute("SELECT id_distribuidora, nombre, comision FROM distribuidoras WHERE nombre LIKE ? ORDER BY nombre LIMIT 10", ('%'+e.control.value+'%',))
         for r in cursor.fetchall():
             texto = f"{r[1]} ({r[2]}%)"
@@ -940,12 +1317,13 @@ def main(page: ft.Page):
     txt_distribuidora_pos = ft.TextField(label="3. 🔍 Distribuidora (Opcional)...", on_change=buscar_distribuidora_pos)
     lista_distribuidora_pos = ft.Container(content=ft.ListView(height=120), visible=False, bgcolor="#eeeeee", border_radius=5)
 
-    def seleccionar_producto_pos(id_p, desc_p, precio_p):
+    def seleccionar_producto_pos(id_p, desc_p, precio_p, stock_p):
         estado_app["producto_pos_id"] = id_p
         estado_app["producto_pos_nombre"] = desc_p
         estado_app["producto_pos_precio"] = precio_p
+        estado_app["producto_pos_stock"] = stock_p
         
-        txt_producto_pos.value = f"{desc_p} (${precio_p:.2f})"
+        txt_producto_pos.value = f"{desc_p} (${precio_p:.2f}) — Stock: {stock_p}"
         lista_producto_pos.visible = False
         page.update()
 
@@ -959,11 +1337,15 @@ def main(page: ft.Page):
             
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id_producto, descripcion, precio FROM productos WHERE stock > 0 AND descripcion LIKE ? ORDER BY descripcion LIMIT 10", ('%'+e.control.value+'%',))
+        # Solo muestra productos con stock > 0 para evitar seleccionar sin existencias
+        cursor.execute("SELECT id_producto, descripcion, precio, stock FROM productos WHERE stock > 0 AND descripcion LIKE ? ORDER BY descripcion LIMIT 10", ('%'+e.control.value+'%',))
         
         for r in cursor.fetchall(): 
             lista_producto_pos.content.controls.append(
-                ft.ListTile(title=ft.Text(f"{r[1]} (${r[2]:.2f})"), on_click=lambda ev, id_p=r[0], desc=r[1], p=r[2]: seleccionar_producto_pos(id_p, desc, p))
+                ft.ListTile(
+                    title=ft.Text(f"{r[1]} (${r[2]:.2f}) — Stock: {r[3]}"),
+                    on_click=lambda ev, id_p=r[0], desc=r[1], p=r[2], s=r[3]: seleccionar_producto_pos(id_p, desc, p, s)
+                )
             )
             
         conn.close()
@@ -1008,13 +1390,49 @@ def main(page: ft.Page):
 
     def agregar_al_carrito_click(e):
         if not estado_app["producto_pos_id"] or not txt_cantidad_pos.value: 
+            page.snack_bar = ft.SnackBar(ft.Text("Selecciona un producto válido."))
+            page.snack_bar.open = True
+            page.update()
             return
             
         cant = int(txt_cantidad_pos.value)
         id_prod = estado_app["producto_pos_id"]
         precio = estado_app["producto_pos_precio"]
         nombre_prod = estado_app["producto_pos_nombre"]
-        
+
+        # ==========================================
+        # VALIDACIÓN ESTRICTA DE STOCK
+        # ==========================================
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT stock FROM productos WHERE id_producto=?", (id_prod,))
+        row = cursor.fetchone()
+        conn.close()
+
+        stock_real = row[0] if row else 0
+
+        # Calcular cuánto ya está en el carrito para este producto
+        cant_en_carrito = sum(item["cant"] for item in carrito_compras if item["id"] == id_prod)
+        stock_disponible = stock_real - cant_en_carrito
+
+        if cant <= 0:
+            page.snack_bar = ft.SnackBar(ft.Text("La cantidad debe ser mayor a cero."))
+            page.snack_bar.open = True
+            page.update()
+            return
+
+        if stock_disponible <= 0:
+            page.snack_bar = ft.SnackBar(ft.Text(f"⚠️ Sin stock disponible para '{nombre_prod}'. Existencias: {stock_real}."))
+            page.snack_bar.open = True
+            page.update()
+            return
+
+        if cant > stock_disponible:
+            page.snack_bar = ft.SnackBar(ft.Text(f"⚠️ Stock insuficiente. Disponible: {stock_disponible} unidad(es) de '{nombre_prod}'."))
+            page.snack_bar.open = True
+            page.update()
+            return
+
         carrito_compras.append({
             "id": id_prod, 
             "desc": nombre_prod, 
@@ -1026,6 +1444,7 @@ def main(page: ft.Page):
         actualizar_tabla_carrito()
         txt_producto_pos.value = ""
         estado_app["producto_pos_id"] = None
+        estado_app["producto_pos_stock"] = 0
         page.update()
 
     def cobrar_venta_click(e):
@@ -1034,6 +1453,23 @@ def main(page: ft.Page):
             page.snack_bar.open = True
             page.update()
             return
+
+        # ==========================================
+        # VALIDACIÓN FINAL DE STOCK ANTES DE COBRAR
+        # ==========================================
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        for item in carrito_compras:
+            cursor.execute("SELECT stock FROM productos WHERE id_producto=?", (item["id"],))
+            row = cursor.fetchone()
+            stock_actual = row[0] if row else 0
+            if item["cant"] > stock_actual:
+                page.snack_bar = ft.SnackBar(ft.Text(f"⚠️ Stock insuficiente para '{item['desc']}'. Disponible: {stock_actual}, solicitado: {item['cant']}."))
+                page.snack_bar.open = True
+                conn.close()
+                page.update()
+                return
+        conn.close()
 
         total_venta = sum(item['subtotal'] for item in carrito_compras)
         tipo = dd_tipo_venta.value
@@ -1058,7 +1494,6 @@ def main(page: ft.Page):
                 )
                 
             if id_dist:
-                # CORRECCIÓN: usamos comision en lugar de comision_porcentaje
                 cursor.execute("SELECT comision FROM distribuidoras WHERE id_distribuidora = ?", (id_dist,))
                 porcentaje = cursor.fetchone()[0]
                 monto_comision = total_venta * (porcentaje / 100.0)
