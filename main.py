@@ -209,8 +209,8 @@ def main(page: ft.Page):
                     c.telefono,
                     IFNULL((SELECT SUM(adeudo) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
                     0 AS total_pagado,
-                    IFNULL((SELECT MAX(fecha) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
-                    IFNULL((SELECT MAX(p.fecha) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), '2000-01-01') AS ultimo_pago,
+                    IFNULL((SELECT MAX(CASE WHEN fecha GLOB '????-??-??*' THEN DATE(fecha) ELSE NULL END) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
+                    IFNULL((SELECT MAX(CASE WHEN p.fecha GLOB '????-??-??*' THEN DATE(p.fecha) ELSE NULL END) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), '2000-01-01') AS ultimo_pago,
                     IFNULL(c.fecha_registro, 'Sin fecha') AS fecha_registro
                 FROM clientes c
             """
@@ -233,11 +233,16 @@ def main(page: ft.Page):
 
                 adeudo_val = total_comprado - total_pagado
 
-                # CLASIFICACIÓN — Espejo exacto de la vista clasificacion_clientes en database1.py
+                # CLASIFICACIÓN — Basada en adeudo real de tienda.db
                 # ultima_actividad = el más reciente entre ultima_venta y ultimo_pago
                 ultima_actividad = ultima_venta if ultima_venta > ultimo_pago else ultimo_pago
+                sin_compras = (ultima_venta == '2000-01-01')
 
-                if adeudo_val > 0 and ultima_actividad <= dos_anos:
+                if sin_compras and adeudo_val <= 0:
+                    # Cliente nuevo sin ninguna compra registrada
+                    tipo_cliente = "VERDE"
+                    color_v = "green"
+                elif adeudo_val > 0 and ultima_actividad <= dos_anos:
                     tipo_cliente = "ROJO"
                     color_v = "red"
                 elif adeudo_val > 0 and ultima_actividad >= seis_meses:

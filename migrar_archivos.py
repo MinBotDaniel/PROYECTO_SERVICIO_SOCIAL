@@ -3,7 +3,7 @@ import sqlite3
 import openpyxl
 
 # --- CONFIGURACIÓN ---
-CARPETA_EXCEL = r"C:\Users\david\OneDrive\Documentos\8vo_Semestre\Servicio_Social\PROYECTO_SERVICIO_SOCIAL\ArchivosExcel"  # <--- RECUERDA CAMBIAR ESTO
+CARPETA_EXCEL = "C:/PROYECTO_SERVICIO_SOCIAL/ArchivosExcel"  # <--- RECUERDA CAMBIAR ESTO
 NOMBRE_DB = "tienda.db"
 
 def inicializar_db():

@@ -25,8 +25,7 @@ def inicializar_tablas():
     # ==========================================
     # 2. TABLAS PRINCIPALES
     # ==========================================
-    # MODIFICACIÓN: Se agrega fecha_registro por defecto a la fecha y hora actual del sistema local
-    cursor.execute('CREATE TABLE IF NOT EXISTS clientes (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, domicilio TEXT, telefono TEXT, fecha_registro TEXT DEFAULT (datetime(\'now\', \'localtime\')))')
+    cursor.execute('CREATE TABLE IF NOT EXISTS clientes (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, domicilio TEXT, telefono TEXT)')
 
     cursor.execute('''CREATE TABLE IF NOT EXISTS productos (
         id_producto INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,15 +45,14 @@ def inicializar_tablas():
     )''')
 
     # ==========================================
-    # 3. ACTUALIZACIÓN DE TABLAS
+    # 3. ACTUALIZACIÓN DE TABLA VENTAS
     # ==========================================
     columnas_nuevas = [
         "ALTER TABLE ventas ADD COLUMN id_empleado INTEGER REFERENCES empleados(id_empleado)",
         "ALTER TABLE ventas ADD COLUMN id_forma_pago INTEGER REFERENCES formas_pago(id_forma_pago)",
         "ALTER TABLE ventas ADD COLUMN tipo_venta TEXT DEFAULT 'CRÉDITO'",
         "ALTER TABLE ventas ADD COLUMN estatus_pago TEXT DEFAULT 'PAGADO'",
-        "ALTER TABLE ventas ADD COLUMN id_distribuidora INTEGER REFERENCES distribuidoras(id_distribuidora)",
-        "ALTER TABLE clientes ADD COLUMN fecha_registro TEXT DEFAULT (datetime('now', 'localtime'))" # MODIFICACIÓN: Alter table para clientes existentes
+        "ALTER TABLE ventas ADD COLUMN id_distribuidora INTEGER REFERENCES distribuidoras(id_distribuidora)"
     ]
 
     for query in columnas_nuevas:
@@ -100,28 +98,23 @@ def inicializar_tablas():
     # 6. REPORTES (VISTAS)
     # ==========================================
     
-    # MODIFICACIÓN: Lógica de la vista centralizada, incluyendo fecha_registro y arreglando el bug de ROJO
     cursor.execute("DROP VIEW IF EXISTS clasificacion_clientes")
     cursor.execute('''
     CREATE VIEW clasificacion_clientes AS
-    SELECT id, nombre, domicilio, telefono, fecha_registro, adeudo_actual, ultima_actividad,
-    CASE WHEN adeudo_actual > 0 AND ultima_actividad <= date('now', '-2 year') THEN 'ROJO'
-         WHEN adeudo_actual > 0 AND ultima_actividad >= date('now', '-6 months') THEN 'VERDE'
-         WHEN adeudo_actual <= 0 AND ultima_venta >= date('now', '-1 year') THEN 'VERDE'
-         WHEN adeudo_actual > 0 AND ultima_actividad < date('now', '-6 months') THEN 'AMARILLO'
-         WHEN adeudo_actual <= 0 AND ultima_venta <= date('now', '-2 year') THEN 'AMARILLO'
+    SELECT id, nombre, telefono, (total_comprado - total_pagado) AS adeudo_actual,
+    CASE WHEN ultima_venta > ultimo_pago THEN ultima_venta ELSE ultimo_pago END AS ultima_actividad,
+    CASE WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago <= date('now', '-2 year') THEN 'ROJO'
+         WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago >= date('now', '-6 months') THEN 'VERDE'
+         WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta >= date('now', '-1 year') THEN 'VERDE'
+         WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago < date('now', '-6 months') THEN 'AMARILLO'
+         WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta <= date('now', '-2 year') THEN 'AMARILLO'
          ELSE 'SIN CLASIFICAR' END AS tipo_cliente
-    FROM (
-        SELECT id, nombre, domicilio, telefono, fecha_registro, (total_comprado - total_pagado) AS adeudo_actual,
-               CASE WHEN ultima_venta > ultimo_pago THEN ultima_venta ELSE ultimo_pago END AS ultima_actividad,
-               ultima_venta
-        FROM (SELECT c.id, c.nombre, c.domicilio, c.telefono, c.fecha_registro,
-              IFNULL((SELECT SUM(total) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
-              IFNULL((SELECT MAX(fecha) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
-              IFNULL((SELECT SUM(p.monto) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), 0) AS total_pagado,
-              IFNULL((SELECT MAX(p.fecha) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), '2000-01-01') AS ultimo_pago
-              FROM clientes c)
-    )
+    FROM (SELECT c.id, c.nombre, c.telefono,
+          IFNULL((SELECT SUM(total) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
+          IFNULL((SELECT MAX(fecha) FROM ventas WHERE cliente_id = c.id), '2000-01-01') AS ultima_venta,
+          IFNULL((SELECT SUM(p.monto) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), 0) AS total_pagado,
+          IFNULL((SELECT MAX(p.fecha) FROM pagos p JOIN ventas v ON p.venta_id = v.id WHERE v.cliente_id = c.id), '2000-01-01') AS ultimo_pago
+          FROM clientes c)
     ''')
 
     # Nombre original restaurado: reporte_comisiones_limpio
@@ -160,7 +153,7 @@ def inicializar_tablas():
 
     conn.commit()
     conn.close()
-    print("¡Base de datos sincronizada con tus nombres originales y nueva vista de clientes!")
+    print("¡Base de datos sincronizada con tus nombres originales!")
 
 if __name__ == "__main__":
     inicializar_tablas()
