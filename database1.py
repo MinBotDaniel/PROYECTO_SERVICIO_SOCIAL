@@ -103,10 +103,11 @@ def inicializar_tablas():
     CREATE VIEW clasificacion_clientes AS
     SELECT id, nombre, telefono, (total_comprado - total_pagado) AS adeudo_actual,
     CASE WHEN ultima_venta > ultimo_pago THEN ultima_venta ELSE ultimo_pago END AS ultima_actividad,
-    CASE WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago <= date('now', '-6 months') THEN 'ROJO'
-         WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago > date('now', '-6 months') THEN 'VERDE'
+    CASE WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago <= date('now', '-2 year') THEN 'ROJO'
+         WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago >= date('now', '-6 months') THEN 'VERDE'
          WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta >= date('now', '-1 year') THEN 'VERDE'
-         WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta < date('now', '-1 year') THEN 'AMARILLO'
+         WHEN (total_comprado - total_pagado) > 0 AND ultimo_pago < date('now', '-6 months') THEN 'AMARILLO'
+         WHEN (total_comprado - total_pagado) <= 0 AND ultima_venta <= date('now', '-2 year') THEN 'AMARILLO'
          ELSE 'SIN CLASIFICAR' END AS tipo_cliente
     FROM (SELECT c.id, c.nombre, c.telefono,
           IFNULL((SELECT SUM(total) FROM ventas WHERE cliente_id = c.id), 0) AS total_comprado,
